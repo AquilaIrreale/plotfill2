@@ -1,4 +1,4 @@
-CXXFLAGS = -std=c++11 -Wall
+CXXFLAGS = -std=c++11 -Wall -g
 LDFLAGS  = -L. -lclipper -lpng
 
 .PHONY: all clean

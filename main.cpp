@@ -6,12 +6,31 @@
 #include <utility>
 #include <vector>
 #include <queue>
+#include <unordered_set>
 
 extern "C" {
 #include <png.h>
 }
 
 #include "clipper.hpp"
+
+#define DP_TRESHOLD     0.5 // PU
+#define INLINE_TRESHOLD 5   // PU
+#define PEN_SIZE        20  // PU (0.5 mm)
+
+#define BIGPRIME 32416190071ULL
+
+#define ACTION(s) fputs(s "... ", stderr)
+#define DONE()    fputs("DONE\n", stderr)
+
+namespace std {
+    template <> struct hash<ClipperLib::IntPoint> {
+        size_t operator ()(const ClipperLib::IntPoint &p) const {
+            std::hash<ClipperLib::cInt> hasher;
+            return (BIGPRIME + hasher(p.X)) * BIGPRIME + hasher(p.Y);
+        }
+    };
+}
 
 using namespace std;
 using namespace ClipperLib;
@@ -21,32 +40,35 @@ void read_png(FILE *fd, vector<vector<bool> > &mat, int &res);
 void clean_image(vector<vector<bool> > &mat);
 bool mat_test(vector<vector<bool> > &mat, size_t i, size_t j);
 inline bool is_border(vector<vector<bool> > &mat, size_t i, size_t j);
-void flood_reverse(vector<vector<bool> > &mat, size_t i, size_t j);
+void flood_fill(vector<vector<bool> > &mat, size_t i, size_t j, bool fill);
 void follow_contour(vector<vector<bool> > &mat, size_t i, size_t j, Path &ret);
 void identify_track(vector<vector<bool> > &mat, size_t i, size_t j, Paths &ret);
 inline cInt px_to_pu(cInt px, int res);
 void remove_duplicates(Path &ret); // TESTED
 void douglas_peucker(Path &ret, double treshold); // TESTED
+void line_simplify(Path &path);
 int poly_orientation(Path &poly);
 void hpgl_print(Path &path);
 
 int main(int argc, char *argv[])
 {
-    const int    pen_size = 20; // 0.5 mm
-    const double treshold = 1.0;
+    const int    pen_size = PEN_SIZE;
+    const double treshold = DP_TRESHOLD;
 
     if (argc < 2) {
-        fputs("plotfill: usage: plotfill filename\n", stderr);
+        fputs("plotfill2: usage: plotfill filename\n", stderr);
         return 0;
     }
 
     FILE *fd = fopen(argv[1], "rb");
 
     if (!fd) {
-        fputs("plotfill: ", stderr);
+        fputs("plotfill2: ", stderr);
         perror(argv[1]);
         return 0;
     }
+
+    ACTION("=> Reading file");
 
     int res;
     vector<vector<bool> > mat;
@@ -58,13 +80,51 @@ int main(int argc, char *argv[])
 
     fclose(fd);
 
+    DONE();
+    ACTION("=> Image pre-processing");
+
     clean_image(mat);
+
+    DONE();
+
+    // DEBUG
+    /*
+    for (auto v = mat.rbegin(); v != mat.rend(); ++v) {
+        for (auto p = v->begin(); p != v->end(); ++p) {
+            putchar(*p ? '#' : '.');
+            putchar(' ');
+        }
+
+        putchar('\n');
+    }
+
+    unsigned x, y;
+    scanf("%u%u", &x, &y);
+
+    Path test;
+    follow_contour(mat, y, x, test);
+
+    for (auto &p : test) {
+        printf("(%llu, %llu)\n", p.X, p.Y);
+    }
+
+    return 0;
+    */
+    // DEBUG END
+
+
+    ACTION("=> Processing tracks");
+    putc('\n', stderr);
+
+    unsigned t = 0;
 
     for (size_t i = 0; i < mat.size(); i++) {
         for (size_t j = 0; j < mat[i].size(); j++) {
             if (!is_border(mat, i, j)) {
                 continue;
             }
+
+            fprintf(stderr, "=> Found track %u at (%lu, %lu)\n", t++, j, i);
 
             Paths track;
             identify_track(mat, i, j, track);
@@ -75,9 +135,31 @@ int main(int argc, char *argv[])
                     p.Y = px_to_pu(p.Y, res);
                 }
 
+                /*
+                transform(
+                    path.begin(),
+                    path.end(),
+                    path.begin(),
+
+                    [&res](IntPoint &p) {
+                        return IntPoint(px_to_pu(p.X, res),
+                                        px_to_pu(p.Y, res));
+                    }
+                );
+                */
+
                 remove_duplicates(path);
+                line_simplify(path);
                 douglas_peucker(path, treshold);
             }
+
+            // DEBUG
+            for (auto &p : track) {
+                hpgl_print(p);
+            }
+
+            continue;
+            //
 
             Paths offseted;
             ClipperOffset co;
@@ -85,6 +167,10 @@ int main(int argc, char *argv[])
             int off = -pen_size/2;
             while (co.Execute(offseted, off), !offseted.empty()) {
                 for (auto &path : offseted) {
+                    if (path.front() != path.back()) {
+                        path.push_back(path.front());
+                    }
+
                     hpgl_print(path);
                 }
 
@@ -92,6 +178,8 @@ int main(int argc, char *argv[])
             }
         }
     }
+
+    puts("PU\n0,0;\n");
 
     return 0;
 }
@@ -160,9 +248,13 @@ void read_png(FILE *fd, vector<vector<bool> > &mat, int &res)
         }
 
         free(row_p[i]);
+
+        mat[i].shrink_to_fit();
     }
 
     free(row_p);
+
+    mat.shrink_to_fit();
 
     png_destroy_info_struct(png, &info);
 }
@@ -171,6 +263,10 @@ void clean_image(vector<vector<bool> > &mat)
 {
     for (size_t i = 0; i < mat.size(); i++) {
         for (size_t j = 0; j < mat[i].size(); j++) {
+            if (!mat[i][j]) {
+                continue;
+            }
+
             if ((!mat_test(mat, i+1, j) && !mat_test(mat, i-1, j))
             ||  (!mat_test(mat, i, j+1) && !mat_test(mat, i, j-1))) {
                 
@@ -225,7 +321,7 @@ bool is_border(vector<vector<bool> > &mat, size_t i, size_t j)
     return true;
 }
 
-void flood_reverse(vector<vector<bool> > &mat, size_t i, size_t j)
+void flood_fill(vector<vector<bool> > &mat, size_t i, size_t j, bool fill)
 {
     if (mat.empty()
     ||  mat[0].empty()
@@ -235,20 +331,21 @@ void flood_reverse(vector<vector<bool> > &mat, size_t i, size_t j)
         return;
     }
 
-    bool fill = !mat[i][j];
-
     queue<pair<size_t, size_t> > q;
     q.emplace(i, j);
     while (!q.empty()) {
-        pair<size_t, size_t> cur = q.front();
+        size_t y = q.front().first;
+        size_t w = q.front().second;
+        size_t e = q.front().second;
+
         q.pop();
 
-        size_t y = cur.first;
-        size_t w = cur.second;
-        size_t e = cur.second;
+        if (mat[y][w] == fill) {
+            continue;
+        }
 
-        while (w > 0              && mat[y][w] != fill) w--;
-        while (e < mat.size() - 1 && mat[y][e] != fill) e++;
+        while (w > 0              && mat[y][w-1] != fill) w--;
+        while (e < mat[0].size() - 1 && mat[y][e+1] != fill) e++;
 
         for (size_t x = w; x <= e; x++) {
             mat[y][x] = fill;
@@ -259,25 +356,368 @@ void flood_reverse(vector<vector<bool> > &mat, size_t i, size_t j)
     }
 }
 
-void follow_contour(vector<vector<bool> > &mat, size_t i, size_t j, Path &ret)
+// DELETE?
+/*
+void gen_neighbors(vector<vector<bool> > &mat, size_t i, size_t j,
+                   vector<pair<size_t, size_t> > &ret)
 {
+    ret.clear();
+
+    bool top    = i >= mat.size() - 1;
+    bool right  = j >= mat[0].size() - 1;
+    bool bottom = i == 0;
+    bool left   = j == 0;
+
+    if (!top) {
+        ret.emplace(i+1, j);
+    }
+
+    if (!right) {
+        if (!top) {
+            ret.emplace(i+1, j+1);
+        }
+
+        ret.emplace(i, j+1);
+
+        if (!bottom) {
+            ret.emplace(i-1, j+1);
+        }
+    }
+
+    if (!bottom) {
+        ret.emplace(i-1, j);
+    }
+
+    if (!left) {
+        if (!bottom) {
+            ret.emplace(i-1, j-1);
+        }
+
+        ret.emplace(i, j-1);
+
+        if (!top) {
+            ret.emplace(i+1, j);
+        }
+    }
+}
+*/
+
+bool is_contour(vector<vector<bool> > & mat, IntPoint &to, IntPoint &from)
+{
+    if (to.X < 0 || to.Y < 0 ||
+        (size_t) to.X > mat[0].size() || (size_t) to.Y > mat.size() ||
+        from.X < 0 || from.Y < 0 ||
+        (size_t) from.X > mat[0].size() || (size_t) from.Y > mat.size()) {
+
+        return false;
+    }
+
+    cInt dx = to.X - from.X;
+    cInt dy = to.Y - from.Y;
+
+    cInt ax, bx, ay, by;
+    if (llabs(dx) == 1 && dy == 0) {
+        ax = min(to.X, from.X);
+        bx = ax;
+        ay = to.Y;
+        by = to.Y - 1;
+    } else if (llabs(dy) == 1 && dx == 0) {
+        ax = to.X;
+        bx = to.X - 1;
+        ay = min(to.Y, from.Y);
+        by = ay;
+    } else {
+        return false;
+    }
+
+    /*
+    bool a, b;
+    if (ax >= 0 && (size_t)ax < mat.size() &&
+        ay >= 0 && (size_t)ay < mat[0].size()) {
+        
+        a = mat[ay][ax];
+    } else {
+        a = false;
+    }
+
+    if (bx >= 0 && (size_t)bx < mat.size() &&
+        by >= 0 && (size_t)by < mat[0].size()) {
+        
+        b = mat[by][bx];
+    } else {
+        b = false;
+    }
+    */
+
+    return mat_test(mat, ay, ax) != mat_test(mat, by, bx);
 }
 
-void identify_track(vector<vector<bool> > &mat, size_t i, size_t j, Paths &ret)
+bool on_edge(vector<vector<bool> > &mat, IntPoint &p)
+{
+    array<IntPoint, 4> px;
+    px[0].X = p.X;
+    px[0].Y = p.Y;
+    px[1].X = p.X;
+    px[1].Y = p.Y - 1;
+    px[2].X = p.X - 1;
+    px[2].Y = p.Y - 1;
+    px[3].X = p.X - 1;
+    px[3].Y = p.Y;
+
+    size_t count = 0;
+    for (auto &it : px) {
+        if (it.Y >= 0 && (size_t) it.Y < mat.size() &&
+            it.X >= 0 && (size_t) it.X < mat[0].size() &&
+            mat[it.Y][it.X]) {
+
+            count++;
+        }
+    }
+
+    return count > 0 && count < 4;
+}
+
+void gen_neighbors(IntPoint p, array<IntPoint, 4> &ret)
+{
+    ret[0].X = p.X + 0;
+    ret[0].Y = p.Y + 1;
+    ret[1].X = p.X + 1;
+    ret[1].Y = p.Y + 0;
+    ret[2].X = p.X - 0;
+    ret[2].Y = p.Y - 1;
+    ret[3].X = p.X - 1;
+    ret[3].Y = p.Y - 0;
+}
+
+void gen_corners(IntPoint p, array<IntPoint, 4> &ret)
+{
+    ret[0].X = p.X;
+    ret[0].Y = p.Y;
+    ret[1].X = p.X;
+    ret[1].Y = p.Y + 1;
+    ret[2].X = p.X + 1;
+    ret[2].Y = p.Y + 1;
+    ret[3].X = p.X + 1;
+    ret[3].Y = p.Y;
+}
+
+void follow_contour(vector<vector<bool> > &mat,
+                    size_t i, size_t j, Path &ret)
+{
+    ret.clear();
+
+    IntPoint base(-1, -1);
+
+    array<IntPoint, 4> corners;
+    gen_corners(IntPoint(j, i), corners);
+
+    for (IntPoint &p : corners) {
+        if (on_edge(mat, p)) {
+            base = p;
+            break;
+        }
+    }
+
+    if (base.X < 0 || base.Y < 0) {
+        return;
+    }
+
+    ret.push_back(base);
+
+    array<IntPoint, 4> neighbors;
+    gen_neighbors(base, neighbors);
+
+    array<IntPoint, 4>::iterator p;
+    for (p = neighbors.begin(); p != neighbors.end(); ++p) {
+        if (is_contour(mat, *p, base)) {
+            break;
+        }
+    }
+
+    if (p == neighbors.end()) {
+        ret.clear();
+        return;
+    }
+
+    ret.push_back(*p);
+    
+    while (*p != base) {
+        IntPoint cur = *p;
+        gen_neighbors(cur, neighbors);
+        
+        for (p = neighbors.begin(); p != neighbors.end(); ++p) {
+            if (*p != ret.rbegin()[1] && is_contour(mat, *p, cur)) {
+                break;
+            }
+        }
+
+        if (p == neighbors.end()) {
+            ret.clear();
+            return;
+        }
+
+        ret.push_back(*p);
+    }
+}
+
+/*
+void follow_contour(vector<vector<bool> > &mat,
+                    size_t i, size_t j, Path &ret)
+{
+    vector<pair<size_t, size_t> > neighbors;
+    gen_neighbors(mat, i, j, neighbors);
+    auto p = neighbors.begin();
+    while (mat[p->first][p->second]) {
+        ++p;
+    }
+
+    if (p == neighbors.begin()) {
+        p = neighbors.end();
+    } else {
+        --p;
+    }
+
+    path.clear();
+    path.push_back(IntPoint(j, i));
+
+    do {
+    }
+}
+*/
+
+bool touches_contour(Path &contour, IntPoint p)
+{
+    array<IntPoint, 4> corners;
+    gen_corners(p, corners);
+
+    for (auto &c : corners) {
+        if (find(contour.begin(),
+                 contour.end(), c) != contour.end()) {
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void contour_to_pixels(Path &contour,
+                       unordered_set<IntPoint> &contour_pixels)
+{
+    contour_pixels.clear();
+
+    if (contour.front() != contour.back()) {
+        contour.push_back(contour.front());
+    }
+
+    for (Path::iterator a = contour.begin(),
+                        b = contour.begin() + 1;
+         b != contour.end();
+         ++a, ++b) {
+
+        cInt dx = b->X - a->X;
+        cInt dy = b->Y - a->Y;
+
+        if (dx > 0 && dy > 0) {
+            exit(1);
+        }
+
+        if (dx == 0 && dy == 0) {
+            continue;
+        }
+
+        if (dx == 1) {
+            contour_pixels.insert(IntPoint(a->X, a->Y - 1));
+        } else if (dx == -1) {
+            contour_pixels.insert(IntPoint(b->X, b->Y));
+        } else if (dy == 1) {
+            contour_pixels.insert(IntPoint(a->X, a->Y));
+        } else if (dy == -1) {
+            contour_pixels.insert(IntPoint(b->X - 1, b->Y));
+        } else {
+            exit(2);
+        }
+    }
+}
+
+void identify_track(vector<vector<bool> > &mat,
+                    size_t i, size_t j, Paths &ret)
 {
     ret.clear();
 
     Path ext_contour;
     follow_contour(mat, i, j, ext_contour);
 
+    if (poly_orientation(ext_contour) < 0) {
+        reverse(ext_contour.begin(), ext_contour.end());
+    }
+
     ret.push_back(ext_contour);
 
-    for (IntPoint &p : ext_contour) {
-        
+    unordered_set<IntPoint> contour_pixels;
+    contour_to_pixels(ext_contour, contour_pixels);
+
+    queue<IntPoint> q;
+    for (const IntPoint &p : contour_pixels) {
+        q.push(p);
+    }
+
+    while (!q.empty()) {
+        IntPoint base = q.front();
+        q.pop();
+
+        if (!mat_test(mat, base.Y, base.X + 1)) {
+            // base is on a left side
+            continue;
+        }
+
+        for (IntPoint p(base.X + 1, base.Y);
+             contour_pixels.count(p) == 0;
+             p.X++) {
+            
+            if (!is_border(mat, p.Y, p.X)) {
+                continue;
+            }
+
+            fprintf(stderr, "   -> Found hole at (%lld, %lld)\n",
+                    p.X, p.Y);
+
+            /*
+            fprintf(stderr, "%lu, N:%lu, E:%lu, S:%lu, W:%lu\n",
+                    contour_pixels.count(IntPoint(p.X, p.Y)),
+                    contour_pixels.count(IntPoint(p.X, p.Y+1)),
+                    contour_pixels.count(IntPoint(p.X+1, p.Y)),
+                    contour_pixels.count(IntPoint(p.X, p.Y-1)),
+                    contour_pixels.count(IntPoint(p.X-1, p.Y)));
+            */
+
+            Path int_contour;
+            follow_contour(mat, p.Y, p.X, int_contour);
+
+            if (poly_orientation(int_contour) > 0) {
+                reverse(int_contour.begin(), int_contour.end());
+            }
+
+            unordered_set<IntPoint> int_pixels;
+            contour_to_pixels(int_contour, int_pixels);
+
+            for (const IntPoint &p : int_pixels) {
+                q.push(p);
+            }
+
+            contour_pixels.insert(int_pixels.begin(),
+                                  int_pixels.end());
+
+            ret.push_back(int_contour);
+
+            break;
+        }
+    }
+
+    /*
+    for (IntPoint &p : ext_contour_pixels) {
         for (IntPoint cur(p.X + 1, p.Y);
-             find(ext_contour.begin(),
-                  ext_contour.end(),
-                  cur) == ext_contour.end();
+             !touches_contour(ext_contour, cur);
              cur.X++) {
 
             if (!mat[cur.Y][cur.X + 1]) {
@@ -295,11 +735,12 @@ void identify_track(vector<vector<bool> > &mat, size_t i, size_t j, Paths &ret)
 
             ret.push_back(int_contour);
 
-            flood_reverse(mat, cur.Y, cur.X + 1);
+            flood_fill(mat, cur.Y, cur.X + 1);
         }
     }
+    */
 
-    flood_reverse(mat, i, j);
+    flood_fill(mat, i, j, false);
 }
 
 inline cInt px_to_pu(cInt px, int res)
@@ -323,6 +764,7 @@ void remove_duplicates(Path &ret)
     }
 
     ret.erase(j, ret.end());
+    ret.shrink_to_fit();
 }
 
 double dist(IntPoint &p1, IntPoint &p2)
@@ -392,8 +834,68 @@ void douglas_peucker(Path &ret, double treshold)
                                        {return p.X == -1;});
     
     ret.erase(new_end, ret.end());
+    ret.shrink_to_fit();
 }
 
+bool is_inline(Path::iterator a, Path::iterator b)
+{
+    if (a == b || a + 1 == b) {
+        return true;
+    }
+
+    for (Path::iterator i = a + 1; i != b; ++i) {
+        if (dist(*a, *b, *i) > INLINE_TRESHOLD) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void line_simplify(Path &path)
+{
+    if (path.size() < 3) {
+        return;
+    }
+
+    Path::iterator a = path.begin();
+    Path::iterator b = a;
+
+    while (a + 1 != path.end()) {
+        while (b != path.end() && is_inline(a, b)) {
+            ++b;
+        }
+
+        --b;
+
+        if (a != b && a + 1 != b) {
+            fill(a + 1, b, IntPoint(-1, -1));
+        }
+
+        a = b;
+    }
+
+    Path::iterator new_end = remove_if(path.begin(),
+                                       path.end(),
+                                       [](IntPoint &p)
+                                       {return p.X == -1;});
+    
+    path.erase(new_end, path.end());
+
+    Path junction(3);
+    junction[0] = path.rbegin()[1];
+    junction[1] = path.front();
+    junction[2] = path[1];
+
+    if (is_inline(junction.begin(), junction.end())) {
+        path.pop_back();
+        path.front() = path.back();
+    }
+
+    path.shrink_to_fit();
+}
+
+// Positive = clockwise
 int poly_orientation(Path &poly)
 {
     if (poly.size() < 2) {
@@ -421,6 +923,20 @@ int poly_orientation(Path &poly)
 
 void hpgl_print(Path &path)
 {
+    printf("PU\n%lld,%lld;\nPD", path.front().X, path.front().Y);
+
+    Path::iterator p;
+    for (p = path.begin() + 1; p != path.end(); ++p) {
+        printf("\n%lld,%lld", p->X, p->Y);
+
+        if (p + 1 != path.end()) {
+            putchar(',');
+        } else {
+            putchar(';');
+        }
+    }
+
+    putchar('\n');
 }
 
 
