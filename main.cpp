@@ -14,9 +14,9 @@ extern "C" {
 
 #include "clipper.hpp"
 
-#define DP_TRESHOLD     0.5 // PU
-#define INLINE_TRESHOLD 5   // PU
-#define PEN_SIZE        20  // PU (0.5 mm)
+#define DP_TRESHOLD     0.3 // PU
+#define INLINE_TRESHOLD 0.8 // PU
+#define PEN_SIZE        12  // PU (0.3 mm)
 
 #define BIGPRIME 32416190071ULL
 
@@ -59,6 +59,7 @@ int main(int argc, char *argv[])
         fputs("plotfill2: usage: plotfill filename\n", stderr);
         return 0;
     }
+
 
     FILE *fd = fopen(argv[1], "rb");
 
@@ -154,18 +155,33 @@ int main(int argc, char *argv[])
             }
 
             // DEBUG
-            for (auto &p : track) {
+            /*
+            Paths offp;
+            ClipperOffset z;
+            z.AddPaths(track, jtRound, etClosedPolygon);
+            z.Execute(offp, -pen_size/2);
+            if (offp.empty()) {
+                puts(":(");
+                return 0;
+            }
+            for (auto &p : offp) {
                 hpgl_print(p);
             }
 
-            continue;
+            return 0;
+            */
             //
+
+            ACTION("=> Offsetting");
+            putc('\n', stderr);
 
             Paths offseted;
             ClipperOffset co;
-            co.AddPaths(track, jtSquare, etClosedPolygon);
+            co.AddPaths(track, jtRound, etClosedPolygon);
             int off = -pen_size/2;
+            int l = 0;
             while (co.Execute(offseted, off), !offseted.empty()) {
+                fprintf(stderr, "   -> Layer %d\n", l++);
                 for (auto &path : offseted) {
                     if (path.front() != path.back()) {
                         path.push_back(path.front());
@@ -174,7 +190,11 @@ int main(int argc, char *argv[])
                     hpgl_print(path);
                 }
 
-                off -= pen_size;
+                off -= pen_size/2;
+            }
+
+            if (l == 0) {
+                fputs("   -> Cannot offset (too narrow?)\n", stderr);
             }
         }
     }
