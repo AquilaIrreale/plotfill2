@@ -1,4 +1,4 @@
-CXXFLAGS = -std=c++11 -Wall -g
+CXXFLAGS = -std=c++11 -Wall -O3
 LDFLAGS  = -L. -lclipper -lpng
 
 .PHONY: all clean
@@ -12,7 +12,7 @@ main.o: main.cpp
 	g++ $(CXXFLAGS) -c -o main.o main.cpp
 
 libclipper.a: clipper.cpp
-	g++ -c -o clipper.o clipper.cpp && ar -rs libclipper.a clipper.o
+	g++ $(CXXFLAGS) -c -o clipper.o clipper.cpp && ar -rs libclipper.a clipper.o
 
 clean:
 	@rm -rvf plotfill2 *.a *.o

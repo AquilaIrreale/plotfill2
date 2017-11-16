@@ -16,7 +16,7 @@ extern "C" {
 
 #define DP_TRESHOLD     0.3 // PU
 #define INLINE_TRESHOLD 0.8 // PU
-#define PEN_SIZE        12  // PU (0.3 mm)
+#define PEN_SIZE        20  // PU (0.5 mm)
 
 #define BIGPRIME 32416190071ULL
 
@@ -54,6 +54,7 @@ int main(int argc, char *argv[])
 {
     const int    pen_size = PEN_SIZE;
     const double treshold = DP_TRESHOLD;
+    bool fill = false;
 
     if (argc < 2) {
         fputs("plotfill2: usage: plotfill filename\n", stderr);
@@ -190,7 +191,11 @@ int main(int argc, char *argv[])
                     hpgl_print(path);
                 }
 
-                off -= pen_size/2;
+                off -= pen_size;
+
+                if (!fill) {
+                    break;
+                }
             }
 
             if (l == 0) {
@@ -283,14 +288,18 @@ void clean_image(vector<vector<bool> > &mat)
 {
     for (size_t i = 0; i < mat.size(); i++) {
         for (size_t j = 0; j < mat[i].size(); j++) {
-            if (!mat[i][j]) {
-                continue;
-            }
+            if (mat[i][j]) {
+                if ((!mat_test(mat, i+1, j) && !mat_test(mat, i-1, j))
+                ||  (!mat_test(mat, i, j+1) && !mat_test(mat, i, j-1))) {
+                    
+                    mat[i][j] = false;
+                }
+            } else {
+                if ((mat_test(mat, i+1, j) && mat_test(mat, i-1, j))
+                ||  (mat_test(mat, i, j+1) && mat_test(mat, i, j-1))) {
 
-            if ((!mat_test(mat, i+1, j) && !mat_test(mat, i-1, j))
-            ||  (!mat_test(mat, i, j+1) && !mat_test(mat, i, j-1))) {
-                
-                mat[i][j] = false;
+                    mat[i][j] = true;
+                }
             }
         }
     }
