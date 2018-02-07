@@ -1,3 +1,5 @@
+#include <config.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstddef>
@@ -16,7 +18,7 @@ extern "C" {
 
 #define DP_TRESHOLD     0.3 // PU
 #define INLINE_TRESHOLD 0.8 // PU
-#define PEN_SIZE        20  // PU (0.5 mm)
+#define PEN_SIZE        24  // PU (0.6 mm)
 
 #define BIGPRIME 32416190071ULL
 
