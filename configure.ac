@@ -14,7 +14,7 @@ AC_CONFIG_FILES([Makefile])
 AC_PROG_CXX
 
 # Checks for libraries.
-PKG_CHECK_MODULES([libpng], [libpng12])
+AC_LIB_LINKFLAGS([png])
 
 # Checks for header files.
 
