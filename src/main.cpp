@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstddef>
+#include <cmath>
 
 #include <algorithm>
 #include <utility>
@@ -293,7 +294,7 @@ void clean_image(vector<vector<bool> > &mat)
             if (mat[i][j]) {
                 if ((!mat_test(mat, i+1, j) && !mat_test(mat, i-1, j))
                 ||  (!mat_test(mat, i, j+1) && !mat_test(mat, i, j-1))) {
-                    
+
                     mat[i][j] = false;
                 }
             } else {
@@ -309,9 +310,9 @@ void clean_image(vector<vector<bool> > &mat)
 
 bool mat_test(vector<vector<bool> > &mat, size_t i, size_t j)
 {
-    if (i < 0 || j < 0
-    ||  i >= mat.size()
+    if (i >= mat.size()
     ||  j >= mat[0].size()) {
+
         return false;
     }
 
