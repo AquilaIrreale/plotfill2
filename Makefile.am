@@ -1,6 +1,6 @@
 AUTOMAKE_OPTIONS = foreign
 
-AM_CXXFLAGS = -I.
+AM_CXXFLAGS = -I. -Wall -Wextra -std=cpp11 -O2
 
 bin_PROGRAMS = plotfill2
 plotfill2_CXXFLAGS = $(libpng_CFLAGS)
